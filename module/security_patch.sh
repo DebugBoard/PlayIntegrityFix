@@ -68,11 +68,16 @@ ro.build.version.security_patch=$SECURITY_PATCH
 ro.vendor.build.security_patch=$SECURITY_PATCH
 EOF
 
-if resetprop --help | grep "compact" > /dev/null; then
-    PROPS="ro.build.version.security_patch ro.vendor.build.security_patch"
+PROPS="ro.build.version.security_patch ro.vendor.build.security_patch"
+
+if resetprop --help | grep -q "compact" 2>&1; then
+    for PROP in $PROPS; do
+        resetprop -n "$PROP" "$SECURITY_PATCH"
+    done
+    resetprop -c >/dev/null 2>&1 || true
+elif resetprop --help | grep -q "rebuild" 2>&1; then
     for PROP in $PROPS; do
         resetprop -n "$PROP" "$SECURITY_PATCH"
         resetprop -c $(resetprop -Z "$PROP") >/dev/null 2>&1 || true
     done
-    resetprop -c >/dev/null 2>&1 || true
 fi
