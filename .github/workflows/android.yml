@@ -2,7 +2,6 @@ name: Android CI
 
 on:
   push:
-    branches: inject_s
     paths-ignore:
       - '**.md'
       - '.github/workflows/autopif.yml'
@@ -12,6 +11,10 @@ on:
       - '**.md'
       - '.github/workflows/autopif.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
