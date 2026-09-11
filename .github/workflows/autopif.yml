@@ -14,12 +14,6 @@ jobs:
     outputs:
       matrix: ${{ steps.get_info.outputs.matrix }}
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v7
-      with:
-        fetch-depth: 1
-        ref: bot
-
     - name: Get device list
       id: get_info
       run: |
@@ -47,12 +41,6 @@ jobs:
       matrix: ${{ fromJson(needs.get_device_list.outputs.matrix) }}
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v7
-      with:
-        fetch-depth: 1
-        ref: bot
-
     - name: Process ROM
       uses: nick-invision/retry@v4
       with:
