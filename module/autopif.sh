@@ -56,8 +56,10 @@ get_model_product_list() {
 
 # Get latest Pixel Canary information
 download https://developer.android.com/about/versions PIXEL_VERSIONS_HTML
-LATEST_URL=$(grep -o 'https://developer.android.com/about/versions/.*[0-9]"' PIXEL_VERSIONS_HTML | sort -ru | cut -d\" -f1 | head -n1)
-download "$LATEST_URL" PIXEL_LATEST_HTML
+# Version links appear both absolute and relative on that page, so match the path
+# and take the highest number -- matching full URLs alone misses the newest version
+LATEST_VERSION=$(grep -o '/about/versions/[0-9][0-9]*' PIXEL_VERSIONS_HTML | grep -o '[0-9][0-9]*$' | sort -n | tail -n1)
+download "https://developer.android.com/about/versions/$LATEST_VERSION" PIXEL_LATEST_HTML
 
 # Get FI and OTA information and use the longer device list
 FI_URL="https://developer.android.com$(grep -o 'href=".*download.*"' PIXEL_LATEST_HTML | cut -d\" -f2 | sort -ru | head -n1)"
