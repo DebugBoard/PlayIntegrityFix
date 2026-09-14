@@ -46,7 +46,28 @@ download_fail() {
     exit 1
 }
 
-download() { busybox wget -T 10 --no-check-certificate -qO - "$1" > "$2" || download_fail "$1"; }
-if command -v curl > /dev/null 2>&1; then
-    download() { curl --connect-timeout 10 -s "$1" > "$2" || download_fail "$1"; }
-fi
+# curl can be present but unusable, e.g. a partially upgraded Termux leaves a
+# curl binary that the linker rejects ("cannot locate symbol ..."), so run it
+# instead of trusting `command -v`. The result is cached and only probed on the
+# first download, to keep sourcing this file at boot free of extra spawns.
+curl_works() {
+    if [ -z "$CURL_WORKS" ]; then
+        if ! command -v curl > /dev/null 2>&1; then
+            CURL_WORKS=false
+        elif curl --version > /dev/null 2>&1; then
+            CURL_WORKS=true
+        else
+            CURL_WORKS=false
+            echo "[!] curl is installed but not usable, falling back to busybox wget"
+        fi
+    fi
+    [ "$CURL_WORKS" = true ]
+}
+
+download() {
+    if curl_works; then
+        curl --connect-timeout 10 -s "$1" > "$2" || download_fail "$1"
+    else
+        busybox wget -T 10 --no-check-certificate -qO - "$1" > "$2" || download_fail "$1"
+    fi
+}

@@ -10,10 +10,17 @@ TEMPDIR="$MODDIR/temp" #fallback
 [ -w /dev ] && TEMPDIR="/dev/playintegrityfix"
 mkdir -p "$TEMPDIR"
 
-download() { busybox wget -T 10 --no-check-certificate -qO - "$1" > "$2"; }
-if command -v curl > /dev/null 2>&1; then
-    download() { curl --connect-timeout 10 -Ls "$1" > "$2"; }
-fi
+# curl_works(), shared with autopif.sh; if this file is missing the fallback
+# below still downloads with busybox wget
+. "$MODDIR/common_func.sh" 2>/dev/null
+
+download() {
+    if command -v curl_works > /dev/null 2>&1 && curl_works; then
+        curl --connect-timeout 10 -Ls "$1" > "$2"
+    else
+        busybox wget -T 10 --no-check-certificate -qO - "$1" > "$2"
+    fi
+}
 
 # fetch script
 fetch_autopif() {
