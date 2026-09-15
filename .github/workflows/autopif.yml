@@ -28,24 +28,29 @@ jobs:
         mkdir -p tmp && cd tmp
         download https://developer.android.com/about/versions PIXEL_VERSIONS_HTML
 
-        # Links to the newest platform are relative while the older ones are
-        # absolute, and sorting them as text ranks "9" above "17", which pins the
-        # device list to an old release. Match the path on its own and sort the
-        # versions as numbers. Kept identical to module/autopif.sh.
-        LATEST_VERSION=$(grep -oE '/about/versions/[0-9]+' PIXEL_VERSIONS_HTML | grep -oE '[0-9]+$' | sort -rn | head -n1)
-        if [ -z "$LATEST_VERSION" ]; then
-          echo "::error::Failed to determine the latest Android version"
-          exit 1
+        # Prefer the release flagged as a preview, that is the one Canary devices
+        # track. Kept in step with module/autopif.sh.
+        LATEST_BETA=$(grep -B4 -A2 'data-icon="preview' PIXEL_VERSIONS_HTML | grep -o 'href="/about/versions/[0-9]*"' | cut -d\" -f2 | head -n1)
+        if [ -z "$LATEST_BETA" ]; then
+          # Links to the newest platform are relative while the older ones are
+          # absolute, and sorting them as text ranks "9" above "17", which pins the
+          # device list to an old release. Sort the versions as numbers instead.
+          LATEST_VERSION=$(grep -oE '/about/versions/[0-9]+' PIXEL_VERSIONS_HTML | grep -oE '[0-9]+$' | sort -rn | head -n1)
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "::error::Failed to determine the latest Android version"
+            exit 1
+          fi
+          LATEST_BETA="/about/versions/$LATEST_VERSION"
         fi
-        echo "Latest Android version: $LATEST_VERSION"
-        download "https://developer.android.com/about/versions/$LATEST_VERSION" PIXEL_LATEST_HTML
+        echo "Latest Android release page: $LATEST_BETA"
+        download "https://developer.android.com$LATEST_BETA" PIXEL_LATEST_HTML
 
         # "download-ota" also matched the "download" pattern, so both fetches
         # landed on the same page and the comparison below was pointless. The OTA
         # page is the factory image page plus a suffix, so derive it.
         FI_PATH=$(grep -oE '/about/versions/[0-9]+(/qpr[0-9]+)?/download' PIXEL_LATEST_HTML | sort -ru | head -n1)
         if [ -z "$FI_PATH" ]; then
-          echo "::error::Failed to find the Pixel download page for Android $LATEST_VERSION"
+          echo "::error::Failed to find the Pixel download page at $LATEST_BETA"
           exit 1
         fi
         OTA_PATH="${FI_PATH}-ota"
@@ -99,7 +104,8 @@ jobs:
           FLASH_KEY=$(grep -o '<body data-client-config=.*' PIXEL_FLASH_HTML | cut -d\; -f2 | cut -d\& -f1)
           curl -H "Referer: https://flash.android.com" -s "https://content-flashstation-pa.googleapis.com/v1/builds?product=$product&key=$FLASH_KEY" > PIXEL_STATION_JSON
 
-          # Tell a failed query apart from a device that simply has no Canary build
+          # Tell a failed query apart from a device that simply has no Canary
+          # build: exiting 0 on both would silently drop a device on a flaky API
           if ! grep -q 'flashstationBuild' PIXEL_STATION_JSON; then
             echo "! Failed to query Flash Tool for $product"
             exit 1
@@ -136,15 +142,15 @@ jobs:
           EOF
 
     - name: Upload digest artifact
+      if: hashFiles(format('{0}.prop', matrix.product)) != ''
       uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.product }}
         path: ${{ matrix.product }}.prop
-        # devices without a Canary build produce no prop on purpose
-        if-no-files-found: ignore
 
   commit_and_push:
     needs: [get_device_list, process_rom]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
@@ -169,18 +175,14 @@ jobs:
 
     - name: Export formatted device list
       run: |
-        echo '${{ needs.get_device_list.outputs.matrix }}' | jq '.include | map({model, product})' > all_devices.json
-
         # Devices whose Canary build was skipped uploaded no prop, so publishing
         # the raw matrix would offer a device whose prop file 404s
-        for prop in device_prop/*.prop; do
-          [ -f "$prop" ] || continue
-          basename "$prop" .prop
-        done | jq -R . | jq -s . > built_devices.json
-
-        jq --slurpfile built built_devices.json \
-          'map(select(.product as $p | $built[0] | index($p)))' all_devices.json > device_list.json
-        rm -f all_devices.json built_devices.json
+        echo '${{ needs.get_device_list.outputs.matrix }}' | jq -r '.include[] | @json' | while read -r device; do
+          product=$(echo "$device" | jq -r '.product')
+          if [ -f "device_prop/${product}.prop" ]; then
+            echo "$device"
+          fi
+        done | jq -s '.' | jq '{include: .}' | jq '.include | map({model, product})' > device_list.json
 
         if [ "$(jq 'length' device_list.json)" -eq 0 ]; then
           echo "::error::No device prop was produced, refusing to publish an empty device list"

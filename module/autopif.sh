@@ -96,21 +96,24 @@ fetch_canary_build() {
 
 # Get latest Pixel Canary information
 download https://developer.android.com/about/versions PIXEL_VERSIONS_HTML
-# Links to the newest platform are relative while the older ones are absolute,
-# and sorting them as text ranks "9" above "17", which pins the device list to an
-# old release. Match the path on its own and sort the versions as numbers.
-# Patterns here stay free of quotes and backslashes: these run inside $(), and a
-# pattern holding an odd number of quotes flips the quote tracking of shells that
-# scan a command substitution before parsing it, which leaks the backslash of a
-# following cut -d\" into the pattern.
-LATEST_VERSION=$(grep -oE '/about/versions/[0-9]+' PIXEL_VERSIONS_HTML | grep -oE '[0-9]+$' | sort -rn | head -n1)
-[ -n "$LATEST_VERSION" ] || bail_out "! Failed to determine the latest Android version"
-download "https://developer.android.com/about/versions/$LATEST_VERSION" PIXEL_LATEST_HTML
+# Prefer the release flagged as a preview, that is the one Canary devices track.
+# The backslash this pattern used to carry made grep warn about a stray escape,
+# and the page spells the attribute without it
+LATEST_BETA=$(grep -B4 -A2 'data-icon="preview' PIXEL_VERSIONS_HTML | grep -o 'href="/about/versions/[0-9]*"' | cut -d\" -f2 | head -n1)
+if [ -z "$LATEST_BETA" ]; then
+	# Links to the newest platform are relative while the older ones are absolute,
+	# and sorting them as text ranks "9" above "17", which pins the device list to
+	# an old release. Match the path on its own and sort the versions as numbers
+	LATEST_VERSION=$(grep -oE '/about/versions/[0-9]+' PIXEL_VERSIONS_HTML | grep -oE '[0-9]+$' | sort -rn | head -n1)
+	[ -n "$LATEST_VERSION" ] || bail_out "! Failed to determine the latest Android version"
+	LATEST_BETA="/about/versions/$LATEST_VERSION"
+fi
+download "https://developer.android.com$LATEST_BETA" PIXEL_LATEST_HTML
 
 # Get FI and OTA information and use the longer device list. The OTA page is the
 # factory image page plus a suffix, so deriving it keeps both on the same release
 FI_PATH=$(grep -oE '/about/versions/[0-9]+(/qpr[0-9]+)?/download' PIXEL_LATEST_HTML | sort -ru | head -n1)
-[ -n "$FI_PATH" ] || bail_out "! Failed to find the Pixel download page for Android $LATEST_VERSION"
+[ -n "$FI_PATH" ] || bail_out "! Failed to find the Pixel download page at $LATEST_BETA"
 OTA_PATH="${FI_PATH}-ota"
 grep -q "$OTA_PATH" PIXEL_LATEST_HTML || OTA_PATH="$FI_PATH"
 download "https://developer.android.com$FI_PATH" PIXEL_FI_HTML
