@@ -27,14 +27,42 @@ jobs:
 
         mkdir -p tmp && cd tmp
         download https://developer.android.com/about/versions PIXEL_VERSIONS_HTML
-        download "$(grep -o 'https://developer.android.com/about/versions/.*[0-9]"' PIXEL_VERSIONS_HTML | sort -ru | cut -d\" -f1 | head -n1)" PIXEL_LATEST_HTML
-        download "https://developer.android.com$(grep -o 'href=".*download.*"' PIXEL_LATEST_HTML | cut -d\" -f2 | sort -ru | head -n1)" PIXEL_FI_HTML
-        download "https://developer.android.com$(grep -o 'href=".*download-ota.*"' PIXEL_LATEST_HTML | cut -d\" -f2 | sort -ru | head -n1)" PIXEL_OTA_HTML
+
+        # Platform links come in absolute and relative form, and sorting them as
+        # text ranks "9" above "17", which pins the device list to an old release.
+        # Pull the version numbers out and sort them as numbers instead.
+        LATEST_VERSION=$(grep -oE 'href="(https://developer\.android\.com)?/about/versions/[0-9]+"' PIXEL_VERSIONS_HTML | grep -oE '[0-9]+' | sort -rn | head -n1)
+        if [ -z "$LATEST_VERSION" ]; then
+          echo "::error::Failed to determine the latest Android version"
+          exit 1
+        fi
+        echo "Latest Android version: $LATEST_VERSION"
+        download "https://developer.android.com/about/versions/$LATEST_VERSION" PIXEL_LATEST_HTML
+
+        # "download-ota" also matches "download", which made both fetches land on
+        # the same page and the comparison below pointless
+        FI_PATH="$(grep -oE 'href="[^"]*/download"' PIXEL_LATEST_HTML | cut -d\" -f2 | sort -ru | head -n1)"
+        OTA_PATH="$(grep -oE 'href="[^"]*/download-ota"' PIXEL_LATEST_HTML | cut -d\" -f2 | sort -ru | head -n1)"
+        [ -n "$FI_PATH" ] || FI_PATH="$OTA_PATH"
+        [ -n "$OTA_PATH" ] || OTA_PATH="$FI_PATH"
+        if [ -z "$FI_PATH" ]; then
+          echo "::error::Failed to find the Pixel download page for Android $LATEST_VERSION"
+          exit 1
+        fi
+        download "https://developer.android.com$FI_PATH" PIXEL_FI_HTML
+        download "https://developer.android.com$OTA_PATH" PIXEL_OTA_HTML
         SRC=FI; [ "$(grep 'tr id=' PIXEL_FI_HTML | sed 's;.*<tr id="\(.*\)">.*;\1;' | wc -w)" -lt "$(grep 'tr id=' PIXEL_OTA_HTML | sed 's;.*<tr id="\(.*\)">.*;\1;' | wc -w)" ] && SRC=OTA
 
         # Extract device information
         grep -A1 'tr id=' PIXEL_${SRC}_HTML | grep 'td' | sed 's;.*<td>\(.*\)</td>.*;\1;' > MODEL_LIST
         grep 'tr id=' PIXEL_${SRC}_HTML | sed 's;.*<tr id="\(.*\)">.*;\1_beta;' > PRODUCT_LIST
+
+        # paste would pair a model with another device's product, which describes
+        # a device that does not exist, so refuse to publish a misaligned list
+        if [ "$(wc -l < MODEL_LIST)" -ne "$(wc -l < PRODUCT_LIST)" ]; then
+          echo "::error::MODEL_LIST and PRODUCT_LIST have different lengths"
+          exit 1
+        fi
 
         matrix_json=$(paste MODEL_LIST PRODUCT_LIST | jq -R 'split("\t") | {model: .[0], product: .[1]}' | jq -s '{include: .}' | jq -c .)
         echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
@@ -69,18 +97,29 @@ jobs:
           wget -T 20 --no-check-certificate https://flash.android.com -O PIXEL_FLASH_HTML
           FLASH_KEY=$(grep -o '<body data-client-config=.*' PIXEL_FLASH_HTML | cut -d\; -f2 | cut -d\& -f1)
           curl -H "Referer: https://flash.android.com" -s "https://content-flashstation-pa.googleapis.com/v1/builds?product=$product&key=$FLASH_KEY" > PIXEL_STATION_JSON
-          tac PIXEL_STATION_JSON | grep -m1 -A13 '"canary": true' > PIXEL_CANARY_JSON
-          ID="$(grep 'releaseCandidateName' PIXEL_CANARY_JSON | cut -d\" -f4)"
-          INCREMENTAL="$(grep 'buildId' PIXEL_CANARY_JSON | cut -d\" -f4)"
-          FINGERPRINT="google/$product/$DEVICE:CANARY/$ID/$INCREMENTAL:user/release-keys"
-          wget -T 20 --no-check-certificate https://source.android.com/docs/security/bulletin/pixel -O PIXEL_SECBULL_HTML
-          CANARY_ID="$(grep '"id"' PIXEL_CANARY_JSON | sed -e 's;.*canary-\(.*\)".*;\1;' -e 's;^\(.\{4\}\);\1-;')"
-          SECURITY_PATCH="$(grep "<td>$CANARY_ID" PIXEL_SECBULL_HTML | sed 's;.*<td>\(.*\)</td>;\1;')"
 
-          if [ -z "$ID" ] || [ -z "$INCREMENTAL" ]; then
-            echo "! Failed to get pif.prop for $product"
+          # Tell a failed query apart from a device that simply has no Canary build
+          if ! grep -q 'flashstationBuild' PIXEL_STATION_JSON; then
+            echo "! Failed to query Flash Tool for $product"
             exit 1
           fi
+
+          tac PIXEL_STATION_JSON | grep -m1 -A13 '"canary": true' > PIXEL_CANARY_JSON || true
+          ID="$(grep 'releaseCandidateName' PIXEL_CANARY_JSON | cut -d\" -f4 || true)"
+          INCREMENTAL="$(grep 'buildId' PIXEL_CANARY_JSON | cut -d\" -f4 || true)"
+
+          # A newly announced Pixel is listed on the download page months before it
+          # gets a Canary build, leave it out of the list instead of failing the run
+          # and blocking the commit for every other device
+          if [ -z "$ID" ] || [ -z "$INCREMENTAL" ]; then
+            echo "- No Canary build published for $model ($product), skipping"
+            exit 0
+          fi
+
+          FINGERPRINT="google/$product/$DEVICE:CANARY/$ID/$INCREMENTAL:user/release-keys"
+          wget -T 20 --no-check-certificate https://source.android.com/docs/security/bulletin/pixel -O PIXEL_SECBULL_HTML
+          CANARY_ID="$(grep '"id"' PIXEL_CANARY_JSON | sed -e 's;.*canary-\(.*\)".*;\1;' -e 's;^\(.\{4\}\);\1-;' || true)"
+          SECURITY_PATCH="$(grep "<td>$CANARY_ID" PIXEL_SECBULL_HTML | sed 's;.*<td>\(.*\)</td>;\1;' || true)"
 
           if [ -z "$SECURITY_PATCH" ]; then
             echo "! Failed to determine exact security patch level"
@@ -100,6 +139,8 @@ jobs:
       with:
         name: ${{ matrix.product }}
         path: ${{ matrix.product }}.prop
+        # devices without a Canary build produce no prop on purpose
+        if-no-files-found: ignore
 
   commit_and_push:
     needs: [get_device_list, process_rom]
@@ -127,7 +168,24 @@ jobs:
 
     - name: Export formatted device list
       run: |
-        echo '${{ needs.get_device_list.outputs.matrix }}' | jq '.include | map({model, product})' > device_list.json
+        echo '${{ needs.get_device_list.outputs.matrix }}' | jq '.include | map({model, product})' > all_devices.json
+
+        # Devices whose Canary build was skipped uploaded no prop, so publishing
+        # the raw matrix would offer a device whose prop file 404s
+        for prop in device_prop/*.prop; do
+          [ -f "$prop" ] || continue
+          basename "$prop" .prop
+        done | jq -R . | jq -s . > built_devices.json
+
+        jq --slurpfile built built_devices.json \
+          'map(select(.product as $p | $built[0] | index($p)))' all_devices.json > device_list.json
+        rm -f all_devices.json built_devices.json
+
+        if [ "$(jq 'length' device_list.json)" -eq 0 ]; then
+          echo "::error::No device prop was produced, refusing to publish an empty device list"
+          exit 1
+        fi
+        jq -r '.[] | "\(.model) (\(.product))"' device_list.json
 
     - name: Commit and Push
       run: |
