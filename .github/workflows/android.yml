@@ -23,7 +23,9 @@ jobs:
       with:
         submodules: 'recursive'
         fetch-depth: 1
-        ref: inject_s
+        # No explicit ref: check out whatever triggered the run. Pinning inject_s
+        # made pull_request and workflow_dispatch runs build the base branch
+        # instead of the code under test
 
     - name: Set up JDK
       uses: actions/setup-java@v5
