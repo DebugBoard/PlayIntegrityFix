@@ -4,6 +4,9 @@ Play Integrity Fix [INJECT] - fork by KOWX712
 
 ## v4.7
 
+- autopif: fix the device list being stuck on an old Android release, Pixel 10 and newer can be selected again.
+- autopif: keep the selected device across runs instead of picking a random one every time.
+- autopif: skip devices that have no Canary build yet, and never pair a model name with another device's product.
 - Fix resetprop command for KernelSU.
 - Rework WebUI, use cdn approach to fetch GitHub resource to avoid `429 too many request`.
 
