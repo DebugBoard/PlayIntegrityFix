@@ -28,10 +28,11 @@ jobs:
         mkdir -p tmp && cd tmp
         download https://developer.android.com/about/versions PIXEL_VERSIONS_HTML
 
-        # Platform links come in absolute and relative form, and sorting them as
-        # text ranks "9" above "17", which pins the device list to an old release.
-        # Pull the version numbers out and sort them as numbers instead.
-        LATEST_VERSION=$(grep -oE 'href="(https://developer\.android\.com)?/about/versions/[0-9]+"' PIXEL_VERSIONS_HTML | grep -oE '[0-9]+' | sort -rn | head -n1)
+        # Links to the newest platform are relative while the older ones are
+        # absolute, and sorting them as text ranks "9" above "17", which pins the
+        # device list to an old release. Match the path on its own and sort the
+        # versions as numbers. Kept identical to module/autopif.sh.
+        LATEST_VERSION=$(grep -oE '/about/versions/[0-9]+' PIXEL_VERSIONS_HTML | grep -oE '[0-9]+$' | sort -rn | head -n1)
         if [ -z "$LATEST_VERSION" ]; then
           echo "::error::Failed to determine the latest Android version"
           exit 1
@@ -39,16 +40,16 @@ jobs:
         echo "Latest Android version: $LATEST_VERSION"
         download "https://developer.android.com/about/versions/$LATEST_VERSION" PIXEL_LATEST_HTML
 
-        # "download-ota" also matches "download", which made both fetches land on
-        # the same page and the comparison below pointless
-        FI_PATH="$(grep -oE 'href="[^"]*/download"' PIXEL_LATEST_HTML | cut -d\" -f2 | sort -ru | head -n1)"
-        OTA_PATH="$(grep -oE 'href="[^"]*/download-ota"' PIXEL_LATEST_HTML | cut -d\" -f2 | sort -ru | head -n1)"
-        [ -n "$FI_PATH" ] || FI_PATH="$OTA_PATH"
-        [ -n "$OTA_PATH" ] || OTA_PATH="$FI_PATH"
+        # "download-ota" also matched the "download" pattern, so both fetches
+        # landed on the same page and the comparison below was pointless. The OTA
+        # page is the factory image page plus a suffix, so derive it.
+        FI_PATH=$(grep -oE '/about/versions/[0-9]+(/qpr[0-9]+)?/download' PIXEL_LATEST_HTML | sort -ru | head -n1)
         if [ -z "$FI_PATH" ]; then
           echo "::error::Failed to find the Pixel download page for Android $LATEST_VERSION"
           exit 1
         fi
+        OTA_PATH="${FI_PATH}-ota"
+        grep -q "$OTA_PATH" PIXEL_LATEST_HTML || OTA_PATH="$FI_PATH"
         download "https://developer.android.com$FI_PATH" PIXEL_FI_HTML
         download "https://developer.android.com$OTA_PATH" PIXEL_OTA_HTML
         SRC=FI; [ "$(grep 'tr id=' PIXEL_FI_HTML | sed 's;.*<tr id="\(.*\)">.*;\1;' | wc -w)" -lt "$(grep 'tr id=' PIXEL_OTA_HTML | sed 's;.*<tr id="\(.*\)">.*;\1;' | wc -w)" ] && SRC=OTA
